@@ -55,8 +55,12 @@ const SiloManagement: React.FC = () => {
   
   // Add state for engineer labels
   const [engineerLabels, setEngineerLabels] = useState<Record<string, string[]>>({});
-  const [editingLabelFor, setEditingLabelFor] = useState<string>('');
   const [currentLabelInput, setCurrentLabelInput] = useState<string>('');
+  const [editingLabel, setEditingLabel] = useState<{ engineerId: string; siloId: string; index: number } | null>(null);
+  const [editLabelValue, setEditLabelValue] = useState('');
+  
+  // Add this new state to track which engineer is getting a new label
+  const [addingLabelFor, setAddingLabelFor] = useState<string | null>(null);
   
   // Handle silo dialog
   const handleOpenSiloDialog = (silo?: Silo) => {
@@ -251,46 +255,71 @@ const SiloManagement: React.FC = () => {
     setCurrentLabelInput(e.target.value);
   };
   
-  // Add a new label
+  // Toggle the label input field visibility
+  const toggleLabelInput = (engineerId: string, siloId: string) => {
+    const key = `${engineerId}:${siloId}`;
+    setAddingLabelFor(prev => prev === key ? null : key);
+    setCurrentLabelInput(''); // Clear input when toggling
+  };
+  
+  // Update handleAddLabel to hide the input after adding
   const handleAddLabel = (engineerId: string, siloId: string) => {
     if (!currentLabelInput.trim()) return;
     
     const key = `${engineerId}:${siloId}`;
     const currentLabels = engineerLabels[key] || [];
+    const newLabel = currentLabelInput.trim();
     
-    if (!currentLabels.includes(currentLabelInput.trim())) {
-      setEngineerLabels({
-        ...engineerLabels,
-        [key]: [...currentLabels, currentLabelInput.trim()]
-      });
+    // Don't add duplicate labels
+    if (currentLabels.includes(newLabel)) {
+      setCurrentLabelInput('');
+      return;
     }
     
+    const updatedLabels = [...currentLabels, newLabel];
+    
+    // Update local state
+    setEngineerLabels(prevLabels => ({
+      ...prevLabels,
+      [key]: updatedLabels
+    }));
+    
+    // Clear the input
     setCurrentLabelInput('');
+    
+    // Hide the input field after adding the label
+    setAddingLabelFor(null);
+    
+    // Immediately save the updated labels to the engineer
+    const engineer = engineers.find(e => e.id === engineerId);
+    if (engineer) {
+      const siloLabels = { ...(engineer.siloLabels || {}) };
+      siloLabels[siloId] = updatedLabels;
+      updateEngineer(engineerId, { siloLabels });
+    }
   };
   
   // Remove a label
-  const handleRemoveLabel = (engineerId: string, siloId: string, labelToRemove: string) => {
+  const handleRemoveLabel = (engineerId: string, siloId: string, index: number) => {
     const key = `${engineerId}:${siloId}`;
     const currentLabels = engineerLabels[key] || [];
     
-    setEngineerLabels({
-      ...engineerLabels,
-      [key]: currentLabels.filter(label => label !== labelToRemove)
-    });
-  };
-  
-  // Save the labels to the engineer for the specific silo
-  const handleSaveLabels = (engineerId: string, siloId: string) => {
-    const engineer = engineers.find(e => e.id === engineerId);
-    if (engineer) {
-      const key = `${engineerId}:${siloId}`;
-      const labels = engineerLabels[key] || [];
+    if (index >= 0 && index < currentLabels.length) {
+      const updatedLabels = [...currentLabels];
+      updatedLabels.splice(index, 1);
       
-      const siloLabels = { ...(engineer.siloLabels || {}) };
-      siloLabels[siloId] = labels;
+      setEngineerLabels(prevLabels => ({
+        ...prevLabels,
+        [key]: updatedLabels
+      }));
       
-      updateEngineer(engineerId, { siloLabels });
-      setEditingLabelFor('');
+      // Immediately save the updated labels to the engineer
+      const engineer = engineers.find(e => e.id === engineerId);
+      if (engineer) {
+        const siloLabels = { ...(engineer.siloLabels || {}) };
+        siloLabels[siloId] = updatedLabels;
+        updateEngineer(engineerId, { siloLabels });
+      }
     }
   };
   
@@ -305,6 +334,46 @@ const SiloManagement: React.FC = () => {
         siloIds: engineer.siloIds.filter(id => id !== siloId),
         siloLabels
       });
+    }
+  };
+  
+  // Start editing a label when double-clicked
+  const handleStartEditLabel = (engineerId: string, siloId: string, index: number, currentValue: string) => {
+    setEditingLabel({ engineerId, siloId, index });
+    setEditLabelValue(currentValue);
+  };
+  
+  // Save the edited label when Enter is pressed or field loses focus
+  const handleSaveEditedLabel = () => {
+    if (editingLabel) {
+      const { engineerId, siloId, index } = editingLabel;
+      const key = `${engineerId}:${siloId}`;
+      const currentLabels = [...(engineerLabels[key] || [])];
+      
+      // If the label is empty, remove it
+      if (editLabelValue.trim() === '') {
+        handleRemoveLabel(engineerId, siloId, index);
+      } else {
+        // Otherwise update the label
+        currentLabels[index] = editLabelValue.trim();
+        
+        setEngineerLabels(prevLabels => ({
+          ...prevLabels,
+          [key]: currentLabels
+        }));
+        
+        // Immediately save the updated labels to the engineer
+        const engineer = engineers.find(e => e.id === engineerId);
+        if (engineer) {
+          const siloLabels = { ...(engineer.siloLabels || {}) };
+          siloLabels[siloId] = currentLabels;
+          updateEngineer(engineerId, { siloLabels });
+        }
+      }
+      
+      // Clear editing state
+      setEditingLabel(null);
+      setEditLabelValue('');
     }
   };
   
@@ -493,10 +562,12 @@ const SiloManagement: React.FC = () => {
                     {siloEngineers.length > 0 ? (
                       <List sx={{ p: 0 }}>
                         {siloEngineers.map((engineer) => {
-                          // Get the labels specific to this silo
+                          // Get the labels specific to this silo - make sure to get fresh data
                           const siloSpecificLabels = engineer.siloLabels?.[silo.id] || [];
                           const labels = Array.isArray(siloSpecificLabels) ? siloSpecificLabels : [siloSpecificLabels];
-                          const editKey = `${engineer.id}:${silo.id}`;
+                          const key = `${engineer.id}:${silo.id}`;
+                          
+                          console.log('Engineer:', engineer.name, 'silo:', silo.name, 'labels:', labels);
                           
                           return (
                             <ListItem 
@@ -509,35 +580,10 @@ const SiloManagement: React.FC = () => {
                                 '&:hover': {
                                   backgroundColor: 'rgba(0, 0, 0, 0.04)'
                                 },
-                                pr: 12 // Add right padding to make room for the buttons
+                                pr: 12 // Add right padding for the action buttons
                               }}
                               secondaryAction={
                                 <Box sx={{ display: 'flex' }}>
-                                  <Tooltip title="Edit labels">
-                                    <IconButton 
-                                      edge="end" 
-                                      size="small"
-                                      onClick={() => {
-                                        setEditingLabelFor(editKey);
-                                        // Initialize with the current labels
-                                        setEngineerLabels({
-                                          ...engineerLabels,
-                                          [editKey]: labels
-                                        });
-                                        setCurrentLabelInput('');
-                                      }}
-                                      sx={{ 
-                                        mr: 1,
-                                        p: 0.5,
-                                        backgroundColor: 'rgba(69, 137, 255, 0.1)',
-                                        '&:hover': {
-                                          backgroundColor: 'rgba(69, 137, 255, 0.2)',
-                                        }
-                                      }}
-                                    >
-                                      <EditIcon fontSize="small" />
-                                    </IconButton>
-                                  </Tooltip>
                                   <Tooltip title="Remove from silo">
                                     <IconButton 
                                       edge="end" 
@@ -577,8 +623,13 @@ const SiloManagement: React.FC = () => {
                                 primaryTypographyProps={{ fontWeight: 500 }}
                               />
                               
-                              {editingLabelFor === editKey ? (
-                                <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 200 }}>
+                              <Box sx={{ 
+                                display: 'flex', 
+                                flexDirection: 'column', 
+                                minWidth: 200,
+                                ml: 2
+                              }}>
+                                {addingLabelFor === `${engineer.id}:${silo.id}` ? (
                                   <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                                     <TextField
                                       size="small"
@@ -586,13 +637,29 @@ const SiloManagement: React.FC = () => {
                                       onChange={handleLabelChange}
                                       placeholder="Add label"
                                       variant="outlined"
+                                      autoFocus
                                       sx={{ 
                                         width: '100%',
                                         mr: 1,
                                         '& .MuiOutlinedInput-root': {
                                           borderRadius: 2,
                                           height: 32,
-                                          fontSize: '0.75rem'
+                                          fontSize: '0.75rem',
+                                          backgroundColor: 'white',
+                                          color: '#0050E6',
+                                          '& fieldset': {
+                                            borderColor: '#CCE0FF',
+                                          },
+                                          '&:hover fieldset': {
+                                            borderColor: '#BBDBFF',
+                                          },
+                                          '&.Mui-focused fieldset': {
+                                            borderColor: '#0050E6',
+                                          }
+                                        },
+                                        '& .MuiInputBase-input::placeholder': {
+                                          color: '#5D91FF',
+                                          opacity: 0.7
                                         }
                                       }}
                                       onKeyPress={(e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -607,70 +674,115 @@ const SiloManagement: React.FC = () => {
                                       onClick={() => handleAddLabel(engineer.id, silo.id)}
                                       sx={{ 
                                         p: 0.5,
-                                        backgroundColor: 'rgba(69, 137, 255, 0.1)'
+                                        backgroundColor: '#EAF2FF',
+                                        border: '1px solid #CCE0FF',
+                                        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                                        '&:hover': {
+                                          backgroundColor: '#D8E8FF',
+                                        }
                                       }}
                                     >
-                                      <AddIcon fontSize="small" />
+                                      <AddIcon fontSize="small" sx={{ color: '#0050E6' }} />
                                     </IconButton>
                                   </Box>
-                                  
-                                  <Box sx={{ display: 'flex', flexWrap: 'wrap', mb: 1, gap: 0.5 }}>
-                                    {(engineerLabels[editKey] || []).map((label, index) => (
+                                ) : (
+                                  <IconButton 
+                                    size="small" 
+                                    color="primary"
+                                    onClick={() => toggleLabelInput(engineer.id, silo.id)}
+                                    sx={{ 
+                                      p: 0.5,
+                                      mb: 1,
+                                      alignSelf: 'flex-start',
+                                      backgroundColor: '#EAF2FF',
+                                      border: '1px solid #CCE0FF',
+                                      boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                                      '&:hover': {
+                                        backgroundColor: '#D8E8FF',
+                                      }
+                                    }}
+                                  >
+                                    <AddIcon fontSize="small" sx={{ color: '#0050E6' }} />
+                                  </IconButton>
+                                )}
+                                
+                                {/* Labels display */}
+                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                  {(engineerLabels[`${engineer.id}:${silo.id}`] || labels).map((label, index) => {
+                                    const isEditing = editingLabel && 
+                                                     editingLabel.engineerId === engineer.id && 
+                                                     editingLabel.siloId === silo.id && 
+                                                     editingLabel.index === index;
+                                    
+                                    return isEditing ? (
+                                      <TextField
+                                        key={index}
+                                        size="small"
+                                        autoFocus
+                                        value={editLabelValue}
+                                        onChange={(e) => setEditLabelValue(e.target.value)}
+                                        variant="outlined"
+                                        sx={{ 
+                                          width: '120px',
+                                          '& .MuiOutlinedInput-root': {
+                                            borderRadius: 2,
+                                            height: 28,
+                                            fontSize: '0.75rem',
+                                            backgroundColor: 'white',
+                                            color: '#0050E6',
+                                            '& fieldset': {
+                                              borderColor: '#CCE0FF',
+                                            },
+                                            '&:hover fieldset': {
+                                              borderColor: '#BBDBFF',
+                                            },
+                                            '&.Mui-focused fieldset': {
+                                              borderColor: '#0050E6',
+                                            }
+                                          }
+                                        }}
+                                        onKeyPress={(e: React.KeyboardEvent<HTMLDivElement>) => {
+                                          if (e.key === 'Enter') {
+                                            handleSaveEditedLabel();
+                                          }
+                                        }}
+                                        onBlur={handleSaveEditedLabel}
+                                      />
+                                    ) : (
                                       <Chip 
                                         key={index}
                                         size="small" 
                                         label={label}
-                                        onDelete={() => handleRemoveLabel(engineer.id, silo.id, label)}
+                                        onDoubleClick={() => handleStartEditLabel(engineer.id, silo.id, index, label)}
+                                        onDelete={() => handleRemoveLabel(engineer.id, silo.id, index)}
                                         sx={{ 
-                                          height: 24,
-                                          backgroundColor: 'rgba(69, 137, 255, 0.1)',
-                                          color: 'primary.main',
-                                          fontWeight: 500
+                                          height: 28,
+                                          borderRadius: '14px',
+                                          backgroundColor: '#EAF2FF',
+                                          color: '#0050E6',
+                                          fontWeight: 500,
+                                          border: '1px solid #CCE0FF',
+                                          marginBottom: 0.5,
+                                          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                                          '& .MuiChip-label': {
+                                            px: 1.5,
+                                          },
+                                          '& .MuiChip-deleteIcon': {
+                                            color: '#5D91FF',
+                                            '&:hover': {
+                                              color: '#0050E6',
+                                            },
+                                          },
+                                          '&:hover': {
+                                            backgroundColor: '#D8E8FF',
+                                            border: '1px solid #BBDBFF',
+                                          }
                                         }}
                                       />
-                                    ))}
-                                  </Box>
-                                  
-                                  <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                    <Button 
-                                      size="small" 
-                                      variant="outlined"
-                                      onClick={() => setEditingLabelFor('')}
-                                      sx={{ mr: 1, borderRadius: 1, fontSize: '0.75rem' }}
-                                    >
-                                      Cancel
-                                    </Button>
-                                    <Button 
-                                      size="small" 
-                                      variant="contained"
-                                      onClick={() => handleSaveLabels(engineer.id, silo.id)}
-                                      sx={{ borderRadius: 1, fontSize: '0.75rem' }}
-                                    >
-                                      Save
-                                    </Button>
-                                  </Box>
+                                    );
+                                  })}
                                 </Box>
-                              ) : (
-                                <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', maxWidth: 200 }}>
-                                  {labels.length > 0 ? (
-                                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mr: 1 }}>
-                                      {labels.map((label, index) => (
-                                        <Chip 
-                                          key={index}
-                                          size="small" 
-                                          label={label}
-                                          sx={{ 
-                                            height: 24,
-                                            backgroundColor: 'rgba(69, 137, 255, 0.1)',
-                                            color: 'primary.main',
-                                            fontWeight: 500
-                                          }}
-                                        />
-                                      ))}
-                                    </Box>
-                                  ) : null}
-                                </Box>
-                              )}
+                              </Box>
                             </ListItem>
                           );
                         })}
@@ -907,55 +1019,154 @@ const SiloManagement: React.FC = () => {
                       Labels for this silo:
                     </Typography>
                     
-                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                      <TextField
-                        size="small"
-                        placeholder="E.g., Backup, Training, SEV 1 only"
-                        value={currentLabelInput}
-                        onChange={handleLabelChange}
-                        sx={{ 
-                          width: '100%',
-                          maxWidth: '300px',
-                          mr: 1,
-                          '& .MuiOutlinedInput-root': {
-                            borderRadius: 2
-                          }
-                        }}
-                        onKeyPress={(e: React.KeyboardEvent<HTMLDivElement>) => {
-                          if (e.key === 'Enter') {
-                            handleAddLabel(engineer.id, selectedSiloId);
-                          }
-                        }}
-                      />
+                    {addingLabelFor === `${engineer.id}:${selectedSiloId}` ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                        <TextField
+                          size="small"
+                          placeholder="E.g., Backup, Training, SEV 1 only"
+                          value={currentLabelInput}
+                          onChange={handleLabelChange}
+                          autoFocus
+                          sx={{ 
+                            width: '100%',
+                            maxWidth: '300px',
+                            mr: 1,
+                            '& .MuiOutlinedInput-root': {
+                              borderRadius: 2,
+                              backgroundColor: 'white',
+                              color: '#0050E6',
+                              '& fieldset': {
+                                borderColor: '#CCE0FF',
+                              },
+                              '&:hover fieldset': {
+                                borderColor: '#BBDBFF',
+                              },
+                              '&.Mui-focused fieldset': {
+                                borderColor: '#0050E6',
+                              }
+                            },
+                            '& .MuiInputBase-input::placeholder': {
+                              color: '#5D91FF',
+                              opacity: 0.7
+                            }
+                          }}
+                          onKeyPress={(e: React.KeyboardEvent<HTMLDivElement>) => {
+                            if (e.key === 'Enter') {
+                              handleAddLabel(engineer.id, selectedSiloId);
+                            }
+                          }}
+                        />
+                        <IconButton 
+                          size="small" 
+                          color="primary"
+                          onClick={() => handleAddLabel(engineer.id, selectedSiloId)}
+                          sx={{ 
+                            p: 0.5,
+                            backgroundColor: '#EAF2FF',
+                            border: '1px solid #CCE0FF',
+                            boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                            '&:hover': {
+                              backgroundColor: '#D8E8FF',
+                            }
+                          }}
+                        >
+                          <AddIcon fontSize="small" sx={{ color: '#0050E6' }} />
+                        </IconButton>
+                      </Box>
+                    ) : (
                       <IconButton 
                         size="small" 
                         color="primary"
-                        onClick={() => handleAddLabel(engineer.id, selectedSiloId)}
+                        onClick={() => toggleLabelInput(engineer.id, selectedSiloId)}
                         sx={{ 
                           p: 0.5,
-                          backgroundColor: 'rgba(69, 137, 255, 0.1)'
+                          mb: 1,
+                          backgroundColor: '#EAF2FF',
+                          border: '1px solid #CCE0FF',
+                          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                          '&:hover': {
+                            backgroundColor: '#D8E8FF',
+                          }
                         }}
                       >
-                        <AddIcon fontSize="small" />
+                        <AddIcon fontSize="small" sx={{ color: '#0050E6' }} />
                       </IconButton>
-                    </Box>
+                    )}
                     
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, maxWidth: '300px' }}>
-                      {(engineerLabels[`${engineer.id}:${selectedSiloId}`] || []).map((label, index) => (
-                        <Chip 
-                          key={index}
-                          size="small" 
-                          label={label}
-                          onDelete={() => handleRemoveLabel(engineer.id, selectedSiloId, label)}
-                          sx={{ 
-                            height: 24,
-                            backgroundColor: 'rgba(69, 137, 255, 0.1)',
-                            color: 'primary.main',
-                            fontWeight: 500,
-                            mb: 0.5
-                          }}
-                        />
-                      ))}
+                      {(engineerLabels[`${engineer.id}:${selectedSiloId}`] || []).map((label, index) => {
+                        const isEditing = editingLabel && 
+                                         editingLabel.engineerId === engineer.id && 
+                                         editingLabel.siloId === selectedSiloId && 
+                                         editingLabel.index === index;
+                        
+                        return isEditing ? (
+                          <TextField
+                            key={index}
+                            size="small"
+                            autoFocus
+                            value={editLabelValue}
+                            onChange={(e) => setEditLabelValue(e.target.value)}
+                            variant="outlined"
+                            sx={{ 
+                              width: '120px',
+                              '& .MuiOutlinedInput-root': {
+                                borderRadius: 2,
+                                height: 28,
+                                fontSize: '0.75rem',
+                                backgroundColor: 'white',
+                                color: '#0050E6',
+                                '& fieldset': {
+                                  borderColor: '#CCE0FF',
+                                },
+                                '&:hover fieldset': {
+                                  borderColor: '#BBDBFF',
+                                },
+                                '&.Mui-focused fieldset': {
+                                  borderColor: '#0050E6',
+                                }
+                              }
+                            }}
+                            onKeyPress={(e: React.KeyboardEvent<HTMLDivElement>) => {
+                              if (e.key === 'Enter') {
+                                handleSaveEditedLabel();
+                              }
+                            }}
+                            onBlur={handleSaveEditedLabel}
+                          />
+                        ) : (
+                          <Chip 
+                            key={index}
+                            size="small" 
+                            label={label}
+                            onDoubleClick={() => handleStartEditLabel(engineer.id, selectedSiloId, index, label)}
+                            onDelete={() => handleRemoveLabel(engineer.id, selectedSiloId, index)}
+                            sx={{ 
+                              height: 28,
+                              borderRadius: '14px',
+                              backgroundColor: '#EAF2FF',
+                              color: '#0050E6',
+                              fontWeight: 500,
+                              border: '1px solid #CCE0FF',
+                              marginBottom: 0.5,
+                              boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+                              '& .MuiChip-label': {
+                                px: 1.5,
+                              },
+                              '& .MuiChip-deleteIcon': {
+                                color: '#5D91FF',
+                                '&:hover': {
+                                  color: '#0050E6',
+                                },
+                              },
+                              '&:hover': {
+                                backgroundColor: '#D8E8FF',
+                                border: '1px solid #BBDBFF',
+                              }
+                            }}
+                          />
+                        );
+                      })}
                     </Box>
                   </Box>
                 )}
