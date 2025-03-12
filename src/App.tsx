@@ -27,6 +27,7 @@ import Dashboard from './pages/Dashboard';
 // Add these imports after existing page/component imports
 import DailyView from './components/dashboard/DailyView';
 import WeeklyView from './components/dashboard/WeeklyView';
+import TemporaryRoster from './components/dashboard/TemporaryRoster';
 
 // Create a custom dark theme with IBM colors
 const theme = createTheme({
@@ -314,6 +315,7 @@ function App() {
                 <Route index element={<Navigate to="daily" replace />} />
                 <Route path="daily" element={<DailyView />} />
                 <Route path="weekly" element={<WeeklyView />} />
+                <Route path="roster" element={<TemporaryRoster />} />
               </Route>
               <Route path="engineers" element={<EngineerManagement />} />
               <Route path="silos" element={<SiloManagement />} />

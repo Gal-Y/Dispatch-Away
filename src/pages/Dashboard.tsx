@@ -9,13 +9,19 @@ const Dashboard: React.FC = () => {
   
   // Determine the active tab by checking the URL
   // If the pathname includes '/dashboard/weekly', active tab is 1, else default to 0 (daily view)
-  const activeTab = location.pathname.includes('/dashboard/weekly') ? 1 : 0;
+  const activeTab = location.pathname.includes('/dashboard/weekly') 
+    ? 1 
+    : location.pathname.includes('/dashboard/roster') 
+      ? 2 
+      : 0;
   
   const handleChange = (_event: React.SyntheticEvent, newValue: number) => {
     if (newValue === 0) {
       navigate('/dashboard/daily');
-    } else {
+    } else if (newValue === 1) {
       navigate('/dashboard/weekly');
+    } else if (newValue === 2) {
+      navigate('/dashboard/roster');
     }
   };
   
@@ -104,6 +110,7 @@ const Dashboard: React.FC = () => {
           >
             <Tab label="Daily View" id="dashboard-tab-0" aria-controls="dashboard-tabpanel-0" />
             <Tab label="Weekly Distribution" id="dashboard-tab-1" aria-controls="dashboard-tabpanel-1" />
+            <Tab label="Temporary Dispatching Roster" id="dashboard-tab-2" aria-controls="dashboard-tabpanel-2" />
           </Tabs>
         </Box>
         <Box sx={{ 
