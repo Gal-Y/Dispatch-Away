@@ -54,8 +54,9 @@ const SiloManagement: React.FC = () => {
   const [selectedEngineers, setSelectedEngineers] = useState<Record<string, boolean>>({});
   
   // Add state for engineer labels
-  const [engineerLabels, setEngineerLabels] = useState<Record<string, string>>({});
+  const [engineerLabels, setEngineerLabels] = useState<Record<string, string[]>>({});
   const [editingLabelFor, setEditingLabelFor] = useState<string>('');
+  const [currentLabelInput, setCurrentLabelInput] = useState<string>('');
   
   // Handle silo dialog
   const handleOpenSiloDialog = (silo?: Silo) => {
@@ -112,13 +113,14 @@ const SiloManagement: React.FC = () => {
     
     // Initialize selected engineers based on current assignments
     const initialSelection: Record<string, boolean> = {};
-    const initialLabels: Record<string, string> = {};
+    const initialLabels: Record<string, string[]> = {};
     
     engineers.forEach(engineer => {
       initialSelection[engineer.id] = engineer.siloIds.includes(siloId);
-      // Get silo-specific label if it exists
-      const key = `${engineer.id}:${siloId}`;
-      initialLabels[key] = engineer.siloLabels?.[siloId] || '';
+      // Get silo-specific labels if they exist
+      const siloLabels = engineer.siloLabels?.[siloId];
+      initialLabels[`${engineer.id}:${siloId}`] = siloLabels ? 
+        (Array.isArray(siloLabels) ? siloLabels : [siloLabels]) : [];
     });
     
     setSelectedEngineers(initialSelection);
@@ -139,58 +141,83 @@ const SiloManagement: React.FC = () => {
   };
   
   const handleSaveAssignments = () => {
-    // Update each engineer's siloIds and labels
-    Object.entries(selectedEngineers).forEach(([engineerId, isSelected]) => {
-      const engineer = engineers.find(e => e.id === engineerId);
+    // Create a map of engineer updates to batch process
+    const engineerUpdates = new Map();
+    
+    // Process each engineer one by one
+    for (const engineer of engineers) {
+      const engineerId = engineer.id;
+      const isSelected = selectedEngineers[engineerId] || false;
+      const currentSiloIds = [...engineer.siloIds];
+      const hasAssignment = currentSiloIds.includes(selectedSiloId);
       
-      if (engineer) {
-        const currentSiloIds = [...engineer.siloIds];
-        const hasAssignment = currentSiloIds.includes(selectedSiloId);
-        const key = `${engineerId}:${selectedSiloId}`;
-        const label = engineerLabels[key] !== undefined ? engineerLabels[key] : '';
+      // Skip if no change is needed
+      if (isSelected === hasAssignment && 
+          (!isSelected || 
+           (JSON.stringify(engineer.siloLabels?.[selectedSiloId]) === 
+            JSON.stringify(engineerLabels[`${engineerId}:${selectedSiloId}`] || [])))) {
+        continue;
+      }
+      
+      // Create or update siloLabels
+      const siloLabels = { ...(engineer.siloLabels || {}) };
+      
+      if (isSelected) {
+        // Add or update labels
+        const labels = engineerLabels[`${engineerId}:${selectedSiloId}`] || [];
+        siloLabels[selectedSiloId] = labels;
         
-        // Create or update siloLabels
-        const siloLabels = { ...(engineer.siloLabels || {}) };
-        
-        if (isSelected) {
-          // Set the label for this silo
-          siloLabels[selectedSiloId] = label;
-        } else if (hasAssignment) {
-          // Remove the label for this silo
-          delete siloLabels[selectedSiloId];
-        }
-        
-        if (isSelected && !hasAssignment) {
-          // Add silo assignment with label
-          updateEngineer(engineerId, { 
+        // Add silo if not already assigned
+        if (!hasAssignment) {
+          console.log(`Adding engineer ${engineer.name} to silo ${selectedSiloId}`);
+          engineerUpdates.set(engineerId, {
             siloIds: [...currentSiloIds, selectedSiloId],
             siloLabels
           });
-        } else if (!isSelected && hasAssignment) {
-          // Remove silo assignment and its label
-          updateEngineer(engineerId, { 
-            siloIds: currentSiloIds.filter(id => id !== selectedSiloId),
-            siloLabels
-          });
-        } else if (isSelected && siloLabels[selectedSiloId] !== engineer.siloLabels?.[selectedSiloId]) {
-          // Just update the label
-          updateEngineer(engineerId, { siloLabels });
+        } else {
+          // Just update the labels
+          console.log(`Updating labels for engineer ${engineer.name} in silo ${selectedSiloId}`);
+          engineerUpdates.set(engineerId, { siloLabels });
         }
+      } else if (hasAssignment) {
+        // Remove silo and its labels
+        delete siloLabels[selectedSiloId];
+        console.log(`Removing engineer ${engineer.name} from silo ${selectedSiloId}`);
+        engineerUpdates.set(engineerId, {
+          siloIds: currentSiloIds.filter(id => id !== selectedSiloId),
+          siloLabels
+        });
       }
-    });
+    }
     
+    // Apply all updates at once
+    if (engineerUpdates.size > 0) {
+      console.log(`Applying updates for ${engineerUpdates.size} engineers`);
+      
+      // Call updateEngineer for each engineer that needs updating
+      engineerUpdates.forEach((update, engineerId) => {
+        updateEngineer(engineerId, update);
+      });
+    }
+    
+    // Close the dialog
     handleCloseAssignDialog();
   };
   
   const handleDeleteSilo = (id: string) => {
     if (window.confirm('Are you sure you want to delete this silo?')) {
-      // Remove this silo from all engineers
-      engineers.forEach(engineer => {
-        if (engineer.siloIds.includes(id)) {
-          updateEngineer(engineer.id, {
-            siloIds: engineer.siloIds.filter(siloId => siloId !== id)
-          });
-        }
+      // Collect engineers that need updates
+      const engineersToUpdate = engineers.filter(engineer => engineer.siloIds.includes(id));
+      
+      // Apply updates
+      engineersToUpdate.forEach(engineer => {
+        const siloLabels = { ...(engineer.siloLabels || {}) };
+        delete siloLabels[id];
+        
+        updateEngineer(engineer.id, {
+          siloIds: engineer.siloIds.filter(siloId => siloId !== id),
+          siloLabels
+        });
       });
       
       // Delete the silo
@@ -220,27 +247,64 @@ const SiloManagement: React.FC = () => {
   };
   
   // Handle label change
-  const handleLabelChange = (engineerId: string, siloId: string, label: string) => {
+  const handleLabelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCurrentLabelInput(e.target.value);
+  };
+  
+  // Add a new label
+  const handleAddLabel = (engineerId: string, siloId: string) => {
+    if (!currentLabelInput.trim()) return;
+    
     const key = `${engineerId}:${siloId}`;
+    const currentLabels = engineerLabels[key] || [];
+    
+    if (!currentLabels.includes(currentLabelInput.trim())) {
+      setEngineerLabels({
+        ...engineerLabels,
+        [key]: [...currentLabels, currentLabelInput.trim()]
+      });
+    }
+    
+    setCurrentLabelInput('');
+  };
+  
+  // Remove a label
+  const handleRemoveLabel = (engineerId: string, siloId: string, labelToRemove: string) => {
+    const key = `${engineerId}:${siloId}`;
+    const currentLabels = engineerLabels[key] || [];
+    
     setEngineerLabels({
       ...engineerLabels,
-      [key]: label
+      [key]: currentLabels.filter(label => label !== labelToRemove)
     });
   };
   
-  // Save the label to the engineer for the specific silo
-  const handleSaveLabel = (engineerId: string, siloId: string) => {
+  // Save the labels to the engineer for the specific silo
+  const handleSaveLabels = (engineerId: string, siloId: string) => {
     const engineer = engineers.find(e => e.id === engineerId);
     if (engineer) {
       const key = `${engineerId}:${siloId}`;
-      // Use empty string if the label is undefined (completely deleted)
-      const label = engineerLabels[key] !== undefined ? engineerLabels[key] : '';
+      const labels = engineerLabels[key] || [];
       
       const siloLabels = { ...(engineer.siloLabels || {}) };
-      siloLabels[siloId] = label;
+      siloLabels[siloId] = labels;
       
       updateEngineer(engineerId, { siloLabels });
       setEditingLabelFor('');
+    }
+  };
+  
+  // Remove engineer from silo
+  const handleRemoveEngineerFromSilo = (engineerId: string, siloId: string) => {
+    const engineer = engineers.find(e => e.id === engineerId);
+    if (engineer) {
+      const siloLabels = { ...(engineer.siloLabels || {}) };
+      delete siloLabels[siloId];
+      
+      updateEngineer(engineerId, {
+        siloIds: engineer.siloIds.filter(id => id !== siloId),
+        siloLabels
+      });
     }
   };
   
@@ -429,8 +493,9 @@ const SiloManagement: React.FC = () => {
                     {siloEngineers.length > 0 ? (
                       <List sx={{ p: 0 }}>
                         {siloEngineers.map((engineer) => {
-                          // Get the label specific to this silo
-                          const siloSpecificLabel = engineer.siloLabels?.[silo.id] || '';
+                          // Get the labels specific to this silo
+                          const siloSpecificLabels = engineer.siloLabels?.[silo.id] || [];
+                          const labels = Array.isArray(siloSpecificLabels) ? siloSpecificLabels : [siloSpecificLabels];
                           const editKey = `${engineer.id}:${silo.id}`;
                           
                           return (
@@ -443,8 +508,58 @@ const SiloManagement: React.FC = () => {
                                 mb: 1,
                                 '&:hover': {
                                   backgroundColor: 'rgba(0, 0, 0, 0.04)'
-                                }
+                                },
+                                pr: 12 // Add right padding to make room for the buttons
                               }}
+                              secondaryAction={
+                                <Box sx={{ display: 'flex' }}>
+                                  <Tooltip title="Edit labels">
+                                    <IconButton 
+                                      edge="end" 
+                                      size="small"
+                                      onClick={() => {
+                                        setEditingLabelFor(editKey);
+                                        // Initialize with the current labels
+                                        setEngineerLabels({
+                                          ...engineerLabels,
+                                          [editKey]: labels
+                                        });
+                                        setCurrentLabelInput('');
+                                      }}
+                                      sx={{ 
+                                        mr: 1,
+                                        p: 0.5,
+                                        backgroundColor: 'rgba(69, 137, 255, 0.1)',
+                                        '&:hover': {
+                                          backgroundColor: 'rgba(69, 137, 255, 0.2)',
+                                        }
+                                      }}
+                                    >
+                                      <EditIcon fontSize="small" />
+                                    </IconButton>
+                                  </Tooltip>
+                                  <Tooltip title="Remove from silo">
+                                    <IconButton 
+                                      edge="end" 
+                                      size="small"
+                                      onClick={() => {
+                                        if (window.confirm(`Remove ${engineer.name} from this silo?`)) {
+                                          handleRemoveEngineerFromSilo(engineer.id, silo.id);
+                                        }
+                                      }}
+                                      sx={{ 
+                                        color: 'error.main',
+                                        backgroundColor: 'rgba(250, 77, 86, 0.1)',
+                                        '&:hover': {
+                                          backgroundColor: 'rgba(250, 77, 86, 0.2)',
+                                        }
+                                      }}
+                                    >
+                                      <DeleteIcon fontSize="small" />
+                                    </IconButton>
+                                  </Tooltip>
+                                </Box>
+                              }
                             >
                               <Avatar 
                                 sx={{ 
@@ -463,67 +578,97 @@ const SiloManagement: React.FC = () => {
                               />
                               
                               {editingLabelFor === editKey ? (
-                                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                                  <TextField
-                                    size="small"
-                                    value={engineerLabels[editKey] !== undefined ? engineerLabels[editKey] : siloSpecificLabel}
-                                    onChange={(e) => handleLabelChange(engineer.id, silo.id, e.target.value)}
-                                    placeholder="Add label"
-                                    variant="outlined"
-                                    sx={{ 
-                                      width: '120px',
-                                      mr: 1,
-                                      '& .MuiOutlinedInput-root': {
-                                        borderRadius: 2,
-                                        height: 32,
-                                        fontSize: '0.75rem'
-                                      }
-                                    }}
-                                  />
-                                  <IconButton 
-                                    size="small" 
-                                    color="primary"
-                                    onClick={() => handleSaveLabel(engineer.id, silo.id)}
-                                    sx={{ 
-                                      p: 0.5,
-                                      backgroundColor: 'rgba(69, 137, 255, 0.1)'
-                                    }}
-                                  >
-                                    <CheckCircleIcon fontSize="small" />
-                                  </IconButton>
-                                </Box>
-                              ) : (
-                                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                                  {siloSpecificLabel ? (
-                                    <Chip 
-                                      size="small" 
-                                      label={siloSpecificLabel}
+                                <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 200 }}>
+                                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                                    <TextField
+                                      size="small"
+                                      value={currentLabelInput}
+                                      onChange={handleLabelChange}
+                                      placeholder="Add label"
+                                      variant="outlined"
                                       sx={{ 
-                                        height: 24,
+                                        width: '100%',
                                         mr: 1,
-                                        backgroundColor: 'rgba(69, 137, 255, 0.1)',
-                                        color: 'primary.main',
-                                        fontWeight: 500
+                                        '& .MuiOutlinedInput-root': {
+                                          borderRadius: 2,
+                                          height: 32,
+                                          fontSize: '0.75rem'
+                                        }
+                                      }}
+                                      onKeyPress={(e: React.KeyboardEvent<HTMLDivElement>) => {
+                                        if (e.key === 'Enter') {
+                                          handleAddLabel(engineer.id, silo.id);
+                                        }
                                       }}
                                     />
+                                    <IconButton 
+                                      size="small" 
+                                      color="primary"
+                                      onClick={() => handleAddLabel(engineer.id, silo.id)}
+                                      sx={{ 
+                                        p: 0.5,
+                                        backgroundColor: 'rgba(69, 137, 255, 0.1)'
+                                      }}
+                                    >
+                                      <AddIcon fontSize="small" />
+                                    </IconButton>
+                                  </Box>
+                                  
+                                  <Box sx={{ display: 'flex', flexWrap: 'wrap', mb: 1, gap: 0.5 }}>
+                                    {(engineerLabels[editKey] || []).map((label, index) => (
+                                      <Chip 
+                                        key={index}
+                                        size="small" 
+                                        label={label}
+                                        onDelete={() => handleRemoveLabel(engineer.id, silo.id, label)}
+                                        sx={{ 
+                                          height: 24,
+                                          backgroundColor: 'rgba(69, 137, 255, 0.1)',
+                                          color: 'primary.main',
+                                          fontWeight: 500
+                                        }}
+                                      />
+                                    ))}
+                                  </Box>
+                                  
+                                  <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                    <Button 
+                                      size="small" 
+                                      variant="outlined"
+                                      onClick={() => setEditingLabelFor('')}
+                                      sx={{ mr: 1, borderRadius: 1, fontSize: '0.75rem' }}
+                                    >
+                                      Cancel
+                                    </Button>
+                                    <Button 
+                                      size="small" 
+                                      variant="contained"
+                                      onClick={() => handleSaveLabels(engineer.id, silo.id)}
+                                      sx={{ borderRadius: 1, fontSize: '0.75rem' }}
+                                    >
+                                      Save
+                                    </Button>
+                                  </Box>
+                                </Box>
+                              ) : (
+                                <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', maxWidth: 200 }}>
+                                  {labels.length > 0 ? (
+                                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mr: 1 }}>
+                                      {labels.map((label, index) => (
+                                        <Chip 
+                                          key={index}
+                                          size="small" 
+                                          label={label}
+                                          sx={{ 
+                                            height: 24,
+                                            backgroundColor: 'rgba(69, 137, 255, 0.1)',
+                                            color: 'primary.main',
+                                            fontWeight: 500
+                                          }}
+                                        />
+                                      ))}
+                                    </Box>
                                   ) : null}
-                                  <IconButton 
-                                    size="small" 
-                                    onClick={() => {
-                                      setEditingLabelFor(editKey);
-                                      // Initialize with the current label
-                                      setEngineerLabels({
-                                        ...engineerLabels,
-                                        [editKey]: siloSpecificLabel
-                                      });
-                                    }}
-                                    sx={{ 
-                                      p: 0.5,
-                                      backgroundColor: 'rgba(69, 137, 255, 0.1)'
-                                    }}
-                                  >
-                                    <EditIcon fontSize="small" />
-                                  </IconButton>
                                 </Box>
                               )}
                             </ListItem>
@@ -759,22 +904,59 @@ const SiloManagement: React.FC = () => {
                 {selectedEngineers[engineer.id] && (
                   <Box sx={{ pl: 4, mt: 1 }}>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-                      Label for this silo only:
+                      Labels for this silo:
                     </Typography>
-                    <TextField
-                      size="small"
-                      placeholder="E.g., Backup, Training, SEV 1 only"
-                      value={engineerLabels[`${engineer.id}:${selectedSiloId}`] !== undefined ? 
-                        engineerLabels[`${engineer.id}:${selectedSiloId}`] : ''}
-                      onChange={(e) => handleLabelChange(engineer.id, selectedSiloId, e.target.value)}
-                      sx={{ 
-                        width: '100%',
-                        maxWidth: '300px',
-                        '& .MuiOutlinedInput-root': {
-                          borderRadius: 2
-                        }
-                      }}
-                    />
+                    
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                      <TextField
+                        size="small"
+                        placeholder="E.g., Backup, Training, SEV 1 only"
+                        value={currentLabelInput}
+                        onChange={handleLabelChange}
+                        sx={{ 
+                          width: '100%',
+                          maxWidth: '300px',
+                          mr: 1,
+                          '& .MuiOutlinedInput-root': {
+                            borderRadius: 2
+                          }
+                        }}
+                        onKeyPress={(e: React.KeyboardEvent<HTMLDivElement>) => {
+                          if (e.key === 'Enter') {
+                            handleAddLabel(engineer.id, selectedSiloId);
+                          }
+                        }}
+                      />
+                      <IconButton 
+                        size="small" 
+                        color="primary"
+                        onClick={() => handleAddLabel(engineer.id, selectedSiloId)}
+                        sx={{ 
+                          p: 0.5,
+                          backgroundColor: 'rgba(69, 137, 255, 0.1)'
+                        }}
+                      >
+                        <AddIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                    
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, maxWidth: '300px' }}>
+                      {(engineerLabels[`${engineer.id}:${selectedSiloId}`] || []).map((label, index) => (
+                        <Chip 
+                          key={index}
+                          size="small" 
+                          label={label}
+                          onDelete={() => handleRemoveLabel(engineer.id, selectedSiloId, label)}
+                          sx={{ 
+                            height: 24,
+                            backgroundColor: 'rgba(69, 137, 255, 0.1)',
+                            color: 'primary.main',
+                            fontWeight: 500,
+                            mb: 0.5
+                          }}
+                        />
+                      ))}
+                    </Box>
                   </Box>
                 )}
               </Box>

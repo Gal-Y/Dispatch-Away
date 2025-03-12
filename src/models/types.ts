@@ -4,7 +4,7 @@ export interface Engineer {
   email: string;
   siloIds: string[];
   isActive: boolean;
-  siloLabels?: Record<string, string>; // Map of siloId -> label
+  siloLabels?: Record<string, string | string[]>; // Map of siloId -> label or labels array
   label?: string; // Optional label for engineer status (e.g., leave)
   disableAssignment?: boolean; // Flag to disable case assignment when true
 }

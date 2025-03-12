@@ -58,47 +58,51 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const [count, setCount] = useState(0);
 
   // Counter actions (for testing)
-  const increment = () => setCount(count + 1);
-  const decrement = () => setCount(count - 1);
+  const increment = () => setCount(prevCount => prevCount + 1);
+  const decrement = () => setCount(prevCount => prevCount - 1);
 
   // Engineer actions
   const addEngineer = (engineer: Omit<Engineer, 'id'>) => {
     const newEngineer = { ...engineer, id: generateId() };
-    setEngineers([...engineers, newEngineer]);
+    setEngineers(prevEngineers => [...prevEngineers, newEngineer]);
   };
 
   const updateEngineer = (id: string, updates: Partial<Engineer>) => {
-    setEngineers(engineers.map(engineer => 
-      engineer.id === id ? { ...engineer, ...updates } : engineer
-    ));
+    setEngineers(prevEngineers => 
+      prevEngineers.map(engineer => 
+        engineer.id === id ? { ...engineer, ...updates } : engineer
+      )
+    );
   };
 
   const removeEngineer = (id: string) => {
-    setEngineers(engineers.filter(engineer => engineer.id !== id));
+    setEngineers(prevEngineers => prevEngineers.filter(engineer => engineer.id !== id));
   };
 
   // Silo actions
   const addSilo = (silo: Omit<Silo, 'id'>) => {
     const newSilo = { ...silo, id: generateId() };
-    setSilos([...silos, newSilo]);
+    setSilos(prevSilos => [...prevSilos, newSilo]);
   };
 
   const updateSilo = (id: string, updates: Partial<Silo>) => {
-    setSilos(silos.map(silo => 
+    setSilos(prevSilos => prevSilos.map(silo => 
       silo.id === id ? { ...silo, ...updates } : silo
     ));
   };
 
   const removeSilo = (id: string) => {
-    setSilos(silos.filter(silo => silo.id !== id));
+    setSilos(prevSilos => prevSilos.filter(silo => silo.id !== id));
     
     // Remove silo assignment from engineers
-    setEngineers(engineers.map(engineer => 
-      engineer.siloIds.includes(id) ? { 
-        ...engineer, 
-        siloIds: engineer.siloIds.filter(siloId => siloId !== id) 
-      } : engineer
-    ));
+    setEngineers(prevEngineers => 
+      prevEngineers.map(engineer => 
+        engineer.siloIds.includes(id) ? { 
+          ...engineer, 
+          siloIds: engineer.siloIds.filter(siloId => siloId !== id) 
+        } : engineer
+      )
+    );
   };
 
   // Case actions
@@ -113,21 +117,21 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       dateCreated: caseData.dateCreated || new Date().toISOString(),
       dateAssigned: caseData.dateAssigned || ''
     };
-    setCases([...cases, newCase as Case]);
+    setCases(prevCases => [...prevCases, newCase as Case]);
   };
 
   const updateCase = (id: string, updates: Partial<Case>) => {
-    setCases(cases.map(caseItem => 
+    setCases(prevCases => prevCases.map(caseItem => 
       caseItem.id === id ? { ...caseItem, ...updates } : caseItem
     ));
   };
 
   const removeCase = (id: string) => {
-    setCases(cases.filter(caseItem => caseItem.id !== id));
+    setCases(prevCases => prevCases.filter(caseItem => caseItem.id !== id));
   };
 
   const assignCase = (caseId: string, engineerId: string | null, date: string) => {
-    setCases(cases.map(caseItem => {
+    setCases(prevCases => prevCases.map(caseItem => {
       if (caseItem.id === caseId) {
         return {
           ...caseItem,
